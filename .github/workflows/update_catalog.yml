@@ -1,0 +1,74 @@
+name: Update Pokemon catalog site
+
+on:
+  schedule:
+    - cron: "0 10 * * *"      # every day at 10:00 UTC = 6 AM Eastern (5 AM in winter)
+  workflow_dispatch:          # adds a "Run workflow" button in the Actions tab
+
+permissions:
+  contents: write             # commit the daily snapshot
+  pages: write                # publish to GitHub Pages
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install packages
+        run: pip install -r requirements.txt
+
+      - name: Build the table from PriceCharting
+        env:
+          PC_DOWNLOAD_URL: ${{ secrets.PC_DOWNLOAD_URL }}
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+        run: python build_catalog.py
+
+      - name: Password-protect the page
+        env:
+          STATICRYPT_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+        run: |
+          cd site
+          npx --yes staticrypt index.html -d ../public --config false --short \
+            --remember 90 --template-title "Pokemon Card Catalog" \
+            --template-color-primary "#1f6feb" --template-color-secondary "#0d1117"
+          ls -la ../public
+
+      - name: Save today's snapshot to the repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add snapshots
+          git diff --cached --quiet || git commit -m "PriceCharting snapshot $(date -u +%F)"
+          git push
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
