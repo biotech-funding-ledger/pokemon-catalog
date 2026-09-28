@@ -72,18 +72,47 @@ def number_parts(num):
 
 
 # ---------- 1. Get the PriceCharting CSV ----------
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+DOWNLOAD_BASE = "https://www.pricecharting.com/price-guide/download-custom"
+HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 "
+                         "(KHTML, like Gecko) Chrome/128.0 Safari/537.36 pokemon-catalog/1.0"}
+
+
+def tidy_url(u):
+    u = u.strip().strip('"').strip("'")
+    if re.fullmatch(r"[0-9a-fA-F]{40}", u):          # a bare token was pasted -> build the link
+        return f"{DOWNLOAD_BASE}?t={u}&category=pokemon-cards"
+    return u
+
+
+def redacted(u):
+    """The link with the token hidden, safe to print in a public log."""
+    p = urlsplit(u)
+    q = parse_qsl(p.query, keep_blank_values=True)
+    tlen = next((len(v) for k, v in q if k == "t"), 0)
+    shown = urlencode([(k, "TOKEN" if k == "t" else v) for k, v in q])
+    return f"{urlunsplit((p.scheme, p.netloc, p.path, shown, ''))}   [token length: {tlen}]"
+
+
 url = os.environ.get("PC_DOWNLOAD_URL", "").strip()
 if not url and os.path.exists(URL_FILE):
     url = open(URL_FILE, encoding="utf-8").read().strip()
 if url:
+    url = tidy_url(url)
     print("Downloading a fresh Pokemon CSV from PriceCharting ...")
+    print("Link in use:", redacted(url))
     try:
-        r = requests.get(url, timeout=300)
+        r = requests.get(url, headers=HEADERS, timeout=300, allow_redirects=True)
     except requests.RequestException as e:
         raise SystemExit(f"Download failed: {type(e).__name__}")
+    ctype = r.headers.get("Content-Type", "")
+    print(f"Response: HTTP {r.status_code}, {ctype or 'no content-type'}, {len(r.content) / 1e6:.1f} MB")
     if r.status_code != 200:
-        raise SystemExit(f"PriceCharting answered HTTP {r.status_code}. "
-                         "Check the PC_DOWNLOAD_URL secret. Note: one CSV download per 10 minutes.")
+        raise SystemExit("PriceCharting rejected that link. It should look like\n"
+                         "  https://www.pricecharting.com/price-guide/download-custom?t=<40-char token>&category=pokemon-cards\n"
+                         "Copy it from Subscriptions -> API/Download (right-click the Pokemon Cards link -> Copy Link Address). "
+                         "Note: one CSV download per 10 minutes.")
     if "product-name" not in r.text[:1000]:
         raise SystemExit("That link returned a web page, not a CSV. Re-copy the Pokemon Cards "
                          "download link from Subscriptions -> API/Download.")
